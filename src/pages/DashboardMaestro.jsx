@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import GestionUsuarios from './GestionUsuarios'
 
 const DAY_COLORS = {
   'Lunes':'#2563eb','Martes':'#7c3aed','Miércoles':'#db2777',
@@ -105,7 +106,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
           </div>
 
           <nav style={{display:'flex',flexDirection:'column',gap:4}}>
-            {[['cursos','📚 Mis Cursos'],['historial','📋 Asistencia Hoy']].map(([t,l]) => (
+            {[['cursos','📚 Mis Cursos'],['historial','📋 Asistencia Hoy'],['usuarios','👥 Usuarios']].map(([t,l]) => (
               <button key={t} style={{...L.navBtn,...(tab===t?L.navBtnActive:{})}} onClick={() => setTab(t)}>{l}</button>
             ))}
           </nav>
@@ -201,6 +202,12 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
               </div>
             )}
           </>
+        )}
+
+        {tab === 'usuarios' && (
+          <div style={{flex:1,overflow:'hidden',display:'flex',height:'calc(100vh - 180px)'}}>
+            <GestionUsuarios user={user} />
+          </div>
         )}
 
         {tab === 'historial' && (
