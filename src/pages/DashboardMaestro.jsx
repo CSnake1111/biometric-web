@@ -15,7 +15,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
   const [tab, setTab]         = useState('cursos')
   const [historial, setHistorial] = useState([])
   const [loadHist, setLoadHist]   = useState(false)
-  const rol = user.roles?.nombre_rol || ''
+  const rol = user.roles?.nombre_rol || user.tipo_persona || ''
 
   useEffect(() => {
     const t = setInterval(() => setAhora(new Date()), 1000)

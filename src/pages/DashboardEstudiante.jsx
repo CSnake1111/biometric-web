@@ -89,7 +89,7 @@ export default function DashboardEstudiante({ user, onLogout }) {
               </div>
               <div>
                 <div style={{fontSize:14,fontWeight:600,color:'var(--text)'}}>{user.nombre} {user.apellido}</div>
-                <div style={{fontSize:10,color:'var(--gold)',fontFamily:"'DM Mono',monospace",marginTop:2}}>Estudiante</div>
+                <div style={{fontSize:10,color:'var(--gold)',fontFamily:"'DM Mono',monospace",marginTop:2}}>{user.roles?.nombre_rol || user.tipo_persona || 'Estudiante'}</div>
               </div>
             </div>
             <div style={{fontSize:11,color:'var(--text2)',lineHeight:1.6}}>

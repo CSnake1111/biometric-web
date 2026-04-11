@@ -52,11 +52,14 @@ export default function App() {
 
   // Detectar rol: primero del join con roles, luego tipo_persona como fallback (igual que el Java)
   const rol = user.roles?.nombre_rol || user.tipo_persona || ''
+  // Roles con acceso de catedrático/admin
+  const esStaff = ['Administrador','Catedratico','Seguridad','Mantenimiento','Administrativo'].includes(rol)
 
   if (page === 'asistencia' && cursoActivo)
     return <Asistencia curso={cursoActivo} user={user} onVolver={volverDashboard} />
 
-  if (rol === 'Estudiante')
+  // Estudiantes van a su dashboard; todo el personal staff va al dashboard de maestro/admin
+  if (!esStaff)
     return <DashboardEstudiante user={user} onLogout={handleLogout} />
 
   return <DashboardMaestro user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
