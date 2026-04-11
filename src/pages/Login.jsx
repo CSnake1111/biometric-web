@@ -25,22 +25,35 @@ const verifyPassword = async (plain, stored) => {
   const s = stored.trim()
 
   if (s.startsWith('LEGACY2:')) {
-    // SHA-256 UTF-8 sin sal
     const h = await hashSHA256(plain)
     return s.substring(8).toUpperCase() === h
   }
 
   if (s.startsWith('LEGACY:')) {
-    // SHA-256 UTF-16LE (como SQL Server / Java)
     const h = await hashSHA256_UTF16LE(plain)
     return s.substring(7).toUpperCase() === h
   }
 
-  // Formato salted nuevo: "base64salt:base64hash"
-  // (el Java lo genera con salt aleatorio — la web no puede verificarlo sin PKDF,
-  //  pero el admin inicial siempre es LEGACY2, así que esto cubre el caso de migración)
-  const hUtf8 = await hashSHA256(plain)
-  return s.toUpperCase() === hUtf8
+  // Formato SALTED nuevo generado por el Java: "base64salt:base64hash"
+  // SHA-256(salt_bytes + password_utf8_bytes)
+  if (s.includes(':')) {
+    try {
+      const parts = s.split(':', 2)
+      const saltBytes  = Uint8Array.from(atob(parts[0]), c => c.charCodeAt(0))
+      const storedHash = Uint8Array.from(atob(parts[1]), c => c.charCodeAt(0))
+      const passBytes  = new TextEncoder().encode(plain)
+      const combined   = new Uint8Array(saltBytes.length + passBytes.length)
+      combined.set(saltBytes, 0)
+      combined.set(passBytes, saltBytes.length)
+      const computed = new Uint8Array(await crypto.subtle.digest('SHA-256', combined))
+      if (computed.length !== storedHash.length) return false
+      let diff = 0
+      for (let i = 0; i < computed.length; i++) diff |= computed[i] ^ storedHash[i]
+      return diff === 0
+    } catch { return false }
+  }
+
+  return false
 }
 
 // ─── Facial recognition via face-api.js (loaded from CDN) ───
