@@ -77,11 +77,11 @@ const loadFaceApi = () => new Promise((resolve) => {
   document.head.appendChild(script)
 })
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, errorInicial = '' }) {
   const [mode, setMode]       = useState('password') // 'password' | 'facial'
   const [usuario, setUsuario] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError]     = useState('')
+  const [error, setError]     = useState(errorInicial)
   const [loading, setLoading] = useState(false)
   const [camStatus, setCamStatus] = useState('idle') // 'idle'|'loading'|'scanning'|'found'|'error'
   const [scanMsg, setScanMsg] = useState('')

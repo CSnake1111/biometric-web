@@ -84,8 +84,11 @@ export default function DashboardEstudiante({ user, onLogout }) {
           {/* Student profile card */}
           <div style={{background:'linear-gradient(135deg,rgba(37,99,235,0.15),rgba(124,58,237,0.1))',border:'1px solid rgba(37,99,235,0.25)',borderRadius:14,padding:16}}>
             <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
-              <div style={{width:44,height:44,borderRadius:'50%',background:'linear-gradient(135deg,#1e3a6e,#7c3aed)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:700,color:'#fff',flexShrink:0}}>
-                {user.nombre?.[0]}{user.apellido?.[0]}
+              <div style={{width:44,height:44,borderRadius:'50%',background:'linear-gradient(135deg,#1e3a6e,#7c3aed)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:700,color:'#fff',flexShrink:0,overflow:'hidden'}}>
+                {user.foto
+                  ? <img src={user.foto} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                  : <>{user.nombre?.[0]}{user.apellido?.[0]}</>
+                }
               </div>
               <div>
                 <div style={{fontSize:14,fontWeight:600,color:'var(--text)'}}>{user.nombre} {user.apellido}</div>

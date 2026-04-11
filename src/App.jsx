@@ -50,17 +50,28 @@ export default function App() {
 
   if (!user) return <Login onLogin={handleLogin} />
 
-  // Detectar rol: primero del join con roles, luego tipo_persona como fallback (igual que el Java)
+  // Detectar rol: join con tabla roles tiene prioridad, tipo_persona como fallback
   const rol = user.roles?.nombre_rol || user.tipo_persona || ''
-  // Roles con acceso de catedrático/admin
-  const esStaff = ['Administrador','Catedratico','Seguridad','Mantenimiento','Administrativo'].includes(rol)
+
+  // ⛔ CONTROL DE ACCESO — solo estos roles pueden usar la web
+  const ROLES_WEB = ['Administrador', 'Catedratico', 'Estudiante']
+  if (!ROLES_WEB.includes(rol)) {
+    // Rol no autorizado: limpiar sesión y mostrar error en login
+    localStorage.removeItem('umg_session')
+    return (
+      <Login
+        onLogin={handleLogin}
+        errorInicial={`Acceso denegado: el rol "${rol || 'sin rol'}" no tiene acceso al portal web. Usa el programa de escritorio.`}
+      />
+    )
+  }
 
   if (page === 'asistencia' && cursoActivo)
     return <Asistencia curso={cursoActivo} user={user} onVolver={volverDashboard} />
 
-  // Estudiantes van a su dashboard; todo el personal staff va al dashboard de maestro/admin
-  if (!esStaff)
+  if (rol === 'Estudiante')
     return <DashboardEstudiante user={user} onLogout={handleLogout} />
 
+  // Catedratico y Administrador
   return <DashboardMaestro user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
 }

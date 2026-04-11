@@ -16,6 +16,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
   const [historial, setHistorial] = useState([])
   const [loadHist, setLoadHist]   = useState(false)
   const rol = user.roles?.nombre_rol || user.tipo_persona || ''
+  const esAdmin = rol === 'Administrador'
 
   useEffect(() => {
     const t = setInterval(() => setAhora(new Date()), 1000)
@@ -91,7 +92,12 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
           </div>
 
           <div style={L.userCard}>
-            <div style={L.avatar}>{user.nombre?.[0]}{user.apellido?.[0]}</div>
+            <div style={{...L.avatar, overflow:'hidden', padding:0}}>
+              {user.foto
+                ? <img src={user.foto} alt="" style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:'50%'}} />
+                : <>{user.nombre?.[0]}{user.apellido?.[0]}</>
+              }
+            </div>
             <div style={{minWidth:0}}>
               <div style={{fontSize:13,fontWeight:600,color:'var(--text)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
                 {user.nombre} {user.apellido}
