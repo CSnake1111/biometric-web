@@ -1,37 +1,37 @@
 import { useState, useEffect } from 'react'
-import { supabase } from './lib/supabase'
 import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
+import DashboardMaestro from './pages/DashboardMaestro'
+import DashboardEstudiante from './pages/DashboardEstudiante'
 import Asistencia from './pages/Asistencia'
 
 export default function App() {
-  const [session, setSession] = useState(null)
-  const [user, setUser]       = useState(null) // row from usuarios table
-  const [page, setPage]       = useState('dashboard') // 'dashboard' | 'asistencia'
+  const [user, setUser]           = useState(null)
+  const [page, setPage]           = useState('dashboard')
   const [cursoActivo, setCursoActivo] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading]     = useState(true)
 
   useEffect(() => {
-    const stored = localStorage.getItem('umg_user')
-    if (stored) {
-      try { setUser(JSON.parse(stored)) } catch {}
-    }
+    try {
+      const stored = localStorage.getItem('umg_session')
+      if (stored) setUser(JSON.parse(stored))
+    } catch {}
     setLoading(false)
   }, [])
 
   const handleLogin = (userData) => {
     setUser(userData)
-    localStorage.setItem('umg_user', JSON.stringify(userData))
+    localStorage.setItem('umg_session', JSON.stringify(userData))
     setPage('dashboard')
   }
 
   const handleLogout = () => {
     setUser(null)
-    localStorage.removeItem('umg_user')
+    localStorage.removeItem('umg_session')
     setPage('dashboard')
+    setCursoActivo(null)
   }
 
-  const irAAsistencia = (curso) => {
+  const irAsistencia = (curso) => {
     setCursoActivo(curso)
     setPage('asistencia')
   }
@@ -42,16 +42,21 @@ export default function App() {
   }
 
   if (loading) return (
-    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh'}}>
-      <div style={{width:40,height:40,border:'3px solid #1e3a6e',borderTopColor:'#3b82f6',borderRadius:'50%',animation:'spin 1s linear infinite'}} />
+    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}>
+      <div style={{width:36,height:36,border:'2px solid rgba(37,99,235,0.3)',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 
   if (!user) return <Login onLogin={handleLogin} />
 
+  const rol = user.roles?.nombre_rol || ''
+
   if (page === 'asistencia' && cursoActivo)
     return <Asistencia curso={cursoActivo} user={user} onVolver={volverDashboard} />
 
-  return <Dashboard user={user} onLogout={handleLogout} onIrAsistencia={irAAsistencia} />
+  if (rol === 'Estudiante')
+    return <DashboardEstudiante user={user} onLogout={handleLogout} />
+
+  return <DashboardMaestro user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
 }
