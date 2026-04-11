@@ -50,7 +50,8 @@ export default function App() {
 
   if (!user) return <Login onLogin={handleLogin} />
 
-  const rol = user.roles?.nombre_rol || ''
+  // Detectar rol: primero del join con roles, luego tipo_persona como fallback (igual que el Java)
+  const rol = user.roles?.nombre_rol || user.tipo_persona || ''
 
   if (page === 'asistencia' && cursoActivo)
     return <Asistencia curso={cursoActivo} user={user} onVolver={volverDashboard} />

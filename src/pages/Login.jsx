@@ -79,7 +79,6 @@ const loadFaceApi = () => new Promise((resolve) => {
 
 export default function Login({ onLogin }) {
   const [mode, setMode]       = useState('password') // 'password' | 'facial'
-  const [rol, setRol]         = useState('maestro')  // 'maestro' | 'estudiante'
   const [usuario, setUsuario] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError]     = useState('')
@@ -309,21 +308,7 @@ export default function Login({ onLogin }) {
         return
       }
 
-      // Check role filter
-      const userRol = userFound.roles?.nombre_rol || ''
-      if (rol === 'maestro' && !['Catedratico','Administrador'].includes(userRol)) {
-        setError(`${userFound.nombre} no es catedrático. Usa el acceso de estudiante.`)
-        setCamStatus('error')
-        setTimeout(() => { setCamStatus('scanning'); startScanning() }, 3000)
-        return
-      }
-      if (rol === 'estudiante' && userRol !== 'Estudiante') {
-        setError(`${userFound.nombre} no es estudiante. Usa el acceso de catedrático.`)
-        setCamStatus('error')
-        setTimeout(() => { setCamStatus('scanning'); startScanning() }, 3000)
-        return
-      }
-
+      // El rol se detecta automáticamente — sin restricción manual
       setScanMsg(`✓ Bienvenido, ${userFound.nombre}!`)
       stopCamera()
 
@@ -371,22 +356,11 @@ export default function Login({ onLogin }) {
         return
       }
 
-      // Obtener el nombre del rol — el join puede venir de distintas formas
-      const userRol = data.roles?.nombre_rol || data.nombre_rol || ''
-
-      // Administradores pueden entrar por cualquier pestaña
-      const esAdmin = userRol === 'Administrador'
-      if (!esAdmin) {
-        if (rol === 'maestro' && !['Catedratico'].includes(userRol)) {
-          setError(`Esta cuenta (${userRol || 'sin rol'}) no tiene acceso de catedrático`)
-          setLoading(false)
-          return
-        }
-        if (rol === 'estudiante' && !['Estudiante'].includes(userRol)) {
-          setError(`Esta cuenta (${userRol || 'sin rol'}) no tiene acceso de estudiante`)
-          setLoading(false)
-          return
-        }
+      // El rol se detecta automáticamente desde la DB — sin restricción por pestaña
+      const userRol = data.roles?.nombre_rol || data.tipo_persona || ''
+      if (!userRol) {
+        // Sin rol asignado: igual puede entrar, el dashboard decidirá qué mostrar
+        console.warn('Usuario sin rol definido:', data.usuario)
       }
 
       await supabase.from('intentos_login').insert({
@@ -427,16 +401,6 @@ export default function Login({ onLogin }) {
             <h1 style={S.title}>BiometricUMG</h1>
             <p style={S.sub}>Portal Académico · UMG La Florida</p>
           </div>
-        </div>
-
-        {/* Role selector */}
-        <div style={S.roleTabs}>
-          {[['maestro','👨‍🏫 Catedrático'],['estudiante','🎓 Estudiante']].map(([r,label]) => (
-            <button key={r} style={{...S.roleTab, ...(rol===r ? S.roleTabActive : {})}}
-              onClick={() => { setRol(r); setError(''); }}>
-              {label}
-            </button>
-          ))}
         </div>
 
         {/* Mode selector */}
@@ -558,16 +522,6 @@ const S = {
   },
   title: { fontSize:20, fontWeight:700, color:'var(--text)', letterSpacing:'-0.5px', fontFamily:'Syne,sans-serif' },
   sub:   { fontSize:11, color:'var(--gold)', fontFamily:"'DM Mono',monospace", marginTop:2 },
-  roleTabs: { display:'flex', gap:8, marginBottom:12 },
-  roleTab: {
-    flex:1, padding:'9px 0', borderRadius:10, border:'1px solid var(--border2)',
-    background:'transparent', color:'var(--text2)', fontSize:13, fontWeight:500,
-    transition:'all .2s',
-  },
-  roleTabActive: {
-    background:'rgba(37,99,235,0.15)', borderColor:'rgba(37,99,235,0.5)',
-    color:'var(--accent3)', fontWeight:600,
-  },
   modeTabs: { display:'flex', gap:6, marginBottom:24, background:'rgba(255,255,255,0.04)', borderRadius:10, padding:4 },
   modeTab: {
     flex:1, padding:'8px 0', borderRadius:8, border:'none',
