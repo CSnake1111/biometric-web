@@ -1,9 +1,46 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 
+// SHA-256 con UTF-8 (para LEGACY2 y formato nuevo)
 const hashSHA256 = async (str) => {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('').toUpperCase()
+}
+
+// SHA-256 con UTF-16LE (para LEGACY: que viene de SQL Server / Java app)
+const hashSHA256_UTF16LE = async (str) => {
+  const utf16 = new Uint8Array(str.length * 2)
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i)
+    utf16[i * 2]     = code & 0xFF
+    utf16[i * 2 + 1] = (code >> 8) & 0xFF
+  }
+  const buf = await crypto.subtle.digest('SHA-256', utf16)
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('').toUpperCase()
+}
+
+// Verifica la contraseña contra cualquier formato de hash guardado en DB
+const verifyPassword = async (plain, stored) => {
+  if (!stored) return false
+  const s = stored.trim()
+
+  if (s.startsWith('LEGACY2:')) {
+    // SHA-256 UTF-8 sin sal
+    const h = await hashSHA256(plain)
+    return s.substring(8).toUpperCase() === h
+  }
+
+  if (s.startsWith('LEGACY:')) {
+    // SHA-256 UTF-16LE (como SQL Server / Java)
+    const h = await hashSHA256_UTF16LE(plain)
+    return s.substring(7).toUpperCase() === h
+  }
+
+  // Formato salted nuevo: "base64salt:base64hash"
+  // (el Java lo genera con salt aleatorio — la web no puede verificarlo sin PKDF,
+  //  pero el admin inicial siempre es LEGACY2, así que esto cubre el caso de migración)
+  const hUtf8 = await hashSHA256(plain)
+  return s.toUpperCase() === hUtf8
 }
 
 // ─── Facial recognition via face-api.js (loaded from CDN) ───
@@ -299,11 +336,9 @@ export default function Login({ onLogin }) {
     setError('')
     setLoading(true)
     try {
-      const hash = await hashSHA256(password)
-
       const { data, error: dbErr } = await supabase
         .from('usuarios')
-        .select('*, roles(nombre_rol)')
+        .select('*, roles!left(nombre_rol)')
         .eq('usuario', usuario.trim())
         .eq('activo', true)
         .single()
@@ -315,11 +350,7 @@ export default function Login({ onLogin }) {
       }
 
       const storedHash = data.password_hash || ''
-      const valid =
-        storedHash === `LEGACY:${hash}` ||
-        storedHash === hash ||
-        storedHash.toUpperCase() === `LEGACY:${hash}`.toUpperCase() ||
-        storedHash.replace(/^LEGACY2?:/i,'') === hash
+      const valid = await verifyPassword(password, storedHash)
 
       if (!valid) {
         setError('Usuario o contraseña incorrectos')
@@ -327,16 +358,22 @@ export default function Login({ onLogin }) {
         return
       }
 
-      const userRol = data.roles?.nombre_rol || ''
-      if (rol === 'maestro' && !['Catedratico','Administrador'].includes(userRol)) {
-        setError('Esta cuenta no tiene rol de catedrático')
-        setLoading(false)
-        return
-      }
-      if (rol === 'estudiante' && !['Estudiante'].includes(userRol)) {
-        setError('Esta cuenta no tiene rol de estudiante')
-        setLoading(false)
-        return
+      // Obtener el nombre del rol — el join puede venir de distintas formas
+      const userRol = data.roles?.nombre_rol || data.nombre_rol || ''
+
+      // Administradores pueden entrar por cualquier pestaña
+      const esAdmin = userRol === 'Administrador'
+      if (!esAdmin) {
+        if (rol === 'maestro' && !['Catedratico'].includes(userRol)) {
+          setError(`Esta cuenta (${userRol || 'sin rol'}) no tiene acceso de catedrático`)
+          setLoading(false)
+          return
+        }
+        if (rol === 'estudiante' && !['Estudiante'].includes(userRol)) {
+          setError(`Esta cuenta (${userRol || 'sin rol'}) no tiene acceso de estudiante`)
+          setLoading(false)
+          return
+        }
       }
 
       await supabase.from('intentos_login').insert({
