@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 
 const ESTADOS = ['PRESENTE', 'AUSENTE', 'JUSTIFICADO', 'TARDANZA']
@@ -66,8 +66,8 @@ export default function Asistencia({ curso, user, onVolver }) {
   const [saved, setSaved]             = useState(false)
   const [filter, setFilter]           = useState('TODOS')
   const [search, setSearch]           = useState('')
-  const [avisoEnviado, setAvisoEnviado] = useState(false)
   const [avisoStatus, setAvisoStatus]   = useState('') // '', 'enviando', 'ok', 'error'
+  const avisoEnviado = useRef(false)  // useRef: no re-renderiza y no se resetea en fetchEstudiantes
 
   const hoy = new Date().toISOString().split('T')[0]
   const hoyDisplay = new Date().toLocaleDateString('es-GT', { weekday:'long', day:'numeric', month:'long' })
@@ -121,8 +121,8 @@ export default function Asistencia({ curso, user, onVolver }) {
         setAsistencias(map)
 
         // ── Enviar aviso de asistencia a estudiantes (solo primera vez) ──
-        if (!avisoEnviado && lista.length > 0) {
-          setAvisoEnviado(true)
+        if (!avisoEnviado.current && lista.length > 0) {
+          avisoEnviado.current = true
           setAvisoStatus('enviando')
           const fechaFmt = new Date().toLocaleDateString('es-GT', {
             weekday:'long', day:'numeric', month:'long', year:'numeric'
@@ -169,42 +169,37 @@ export default function Asistencia({ curso, user, onVolver }) {
       for (const est of estudiantes) {
         const id = est.id_usuario
         const estado = asistencias[id]?.estado || 'PENDIENTE'
-        const idAsistencia = asistencias[id]?.idAsistencia
 
-        if (idAsistencia) {
-          // UPDATE
-          const { error } = await supabase
-            .from('asistencias')
-            .update({
-              estado,
-              hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null
-            })
-            .eq('id_asistencia', idAsistencia)
-          if (error) console.error('Update error para', id, error)
-        } else {
-          // INSERT
-          const { data, error } = await supabase
-            .from('asistencias')
-            .insert({
-              id_curso:     curso.id_curso,
+        // FIX Bug#4: usar upsert en lugar de INSERT/UPDATE separados.
+        // Si la app desktop ya insertó el registro, el INSERT fallaba en silencio
+        // por el constraint único (id_curso, id_estudiante, fecha).
+        // upsert con onConflict garantiza que siempre se actualice.
+        const { data, error } = await supabase
+          .from('asistencias')
+          .upsert(
+            {
+              id_curso:      curso.id_curso,
               id_estudiante: id,
-              fecha:        hoy,
+              fecha:         hoy,
               estado,
-              hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
-            })
-            .select()
-            .single()
-          if (error) console.error('Insert error para', id, error)
-          if (data) {
-            setAsistencias(prev => ({
-              ...prev,
-              [id]: { estado, idAsistencia: data.id_asistencia }
-            }))
-          }
+              hora_ingreso:  estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
+            },
+            { onConflict: 'id_curso,id_estudiante,fecha' }
+          )
+          .select()
+          .single()
+
+        if (error) {
+          console.error('Upsert error para estudiante', id, error)
+        } else if (data) {
+          setAsistencias(prev => ({
+            ...prev,
+            [id]: { estado, idAsistencia: data.id_asistencia }
+          }))
         }
       }
       setSaved(true)
-      // Re-fetch para sincronizar IDs
+      // Re-fetch para sincronizar IDs actualizados desde Supabase
       await fetchEstudiantes()
     } catch (e) { console.error(e) }
     setSaving(false)
