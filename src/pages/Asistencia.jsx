@@ -10,6 +10,54 @@ const ESTADO_COLORS = {
   PENDIENTE:   { bg: 'rgba(71,85,105,0.15)',  text: '#94a3b8', border: 'rgba(71,85,105,0.3)'  },
 }
 
+// ─── Envío de correos vía Supabase Edge Function ─────────────────
+// Si no tienes Edge Functions, puedes usar EmailJS o cualquier otro servicio REST.
+// La función espera: { to, subject, html }
+const enviarCorreoAviso = async (estudiante, curso, fecha) => {
+  try {
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:#003366;padding:20px;text-align:center;">
+          <h1 style="color:white;margin:0;font-size:20px;">BiometricUMG 2.0</h1>
+          <p style="color:#adc8e8;margin:4px 0;font-size:13px;">Universidad Mariano Gálvez · Sede La Florida</p>
+        </div>
+        <div style="padding:28px;background:#f9f9f9;">
+          <h2 style="color:#003366;">📋 Aviso de Asistencia</h2>
+          <p>Estimado/a <strong>${estudiante.nombre} ${estudiante.apellido}</strong>,</p>
+          <p>El catedrático acaba de abrir la lista de asistencia para el curso:</p>
+          <div style="background:white;border:1px solid #ddd;border-radius:8px;padding:16px;margin:18px 0;">
+            <p style="margin:0;font-size:15px;"><strong>📚 Curso:</strong> ${curso.nombre_curso} — Sección ${curso.seccion}</p>
+            <p style="margin:8px 0 0;font-size:14px;color:#555;">
+              🗓 ${curso.dia_semana} · ${curso.hora_inicio} – ${curso.hora_fin}
+            </p>
+            <p style="margin:6px 0 0;font-size:14px;color:#555;">
+              📅 Fecha: <strong>${fecha}</strong>
+            </p>
+          </div>
+          <p>Ingresa al portal web y confirma tu asistencia antes de que el catedrático la cierre.</p>
+          <p style="color:#999;font-size:12px;margin-top:24px;">
+            Este correo fue generado automáticamente · BiometricUMG 2.0 · UMG La Florida 2026
+          </p>
+        </div>
+        <div style="background:#b40000;padding:10px;text-align:center;">
+          <p style="color:white;margin:0;font-size:11px;">BiometricUMG 2.0 | Sistema de Control de Asistencia | 2026</p>
+        </div>
+      </div>
+    `
+    // Llama a la Edge Function 'send-email' — ajusta la URL según tu proyecto Supabase
+    const { error } = await supabase.functions.invoke('send-email', {
+      body: {
+        to: estudiante.correo,
+        subject: `📋 Aviso de Asistencia — ${curso.nombre_curso} (${fecha})`,
+        html,
+      },
+    })
+    if (error) console.warn('Correo no enviado a', estudiante.correo, error)
+  } catch (e) {
+    console.warn('Error enviando aviso a', estudiante.correo, e)
+  }
+}
+
 export default function Asistencia({ curso, user, onVolver }) {
   const [estudiantes, setEstudiantes] = useState([])
   const [asistencias, setAsistencias] = useState({}) // { idEstudiante: { estado, idAsistencia } }
@@ -18,6 +66,8 @@ export default function Asistencia({ curso, user, onVolver }) {
   const [saved, setSaved]             = useState(false)
   const [filter, setFilter]           = useState('TODOS')
   const [search, setSearch]           = useState('')
+  const [avisoEnviado, setAvisoEnviado] = useState(false)
+  const [avisoStatus, setAvisoStatus]   = useState('') // '', 'enviando', 'ok', 'error'
 
   const hoy = new Date().toISOString().split('T')[0]
   const hoyDisplay = new Date().toLocaleDateString('es-GT', { weekday:'long', day:'numeric', month:'long' })
@@ -27,33 +77,70 @@ export default function Asistencia({ curso, user, onVolver }) {
   const fetchEstudiantes = async () => {
     setLoading(true)
     try {
-      // Traer estudiantes inscritos
-      const { data: inscritos } = await supabase
+      // ── FIX: asegurarse de traer id_usuario correctamente ──────────
+      const { data: inscritos, error: errInsc } = await supabase
         .from('inscripciones_curso')
-        .select('id_estudiante, usuarios(id_usuario, nombre, apellido, carne, correo, carrera, seccion)')
+        .select(`
+          id_estudiante,
+          usuarios:id_estudiante (
+            id_usuario, nombre, apellido, carne, correo, carrera, seccion
+          )
+        `)
         .eq('id_curso', curso.id_curso)
         .eq('activo', true)
 
-      const lista = (inscritos || []).map(i => i.usuarios).filter(Boolean)
+      if (errInsc) {
+        console.error('Error cargando inscritos:', errInsc)
+        setLoading(false)
+        return
+      }
+
+      // Filtrar nulos y aplanar
+      const lista = (inscritos || [])
+        .map(i => i.usuarios)
+        .filter(u => u && u.id_usuario)
+
       setEstudiantes(lista)
 
-      // Traer asistencias de hoy para este curso
+      // ── Asistencias de hoy ─────────────────────────────────────────
       const ids = lista.map(e => e.id_usuario)
       if (ids.length > 0) {
-        const { data: asist } = await supabase
+        const { data: asist, error: errAsist } = await supabase
           .from('asistencias')
           .select('*')
           .eq('id_curso', curso.id_curso)
           .eq('fecha', hoy)
           .in('id_estudiante', ids)
 
+        if (errAsist) console.error('Error cargando asistencias:', errAsist)
+
         const map = {}
         ;(asist || []).forEach(a => {
           map[a.id_estudiante] = { estado: a.estado, idAsistencia: a.id_asistencia }
         })
         setAsistencias(map)
+
+        // ── Enviar aviso de asistencia a estudiantes (solo primera vez) ──
+        if (!avisoEnviado && lista.length > 0) {
+          setAvisoEnviado(true)
+          setAvisoStatus('enviando')
+          const fechaFmt = new Date().toLocaleDateString('es-GT', {
+            weekday:'long', day:'numeric', month:'long', year:'numeric'
+          })
+          // Enviar en paralelo sin bloquear la UI
+          const estudiantesConCorreo = lista.filter(e => e.correo)
+          Promise.allSettled(
+            estudiantesConCorreo.map(e => enviarCorreoAviso(e, curso, fechaFmt))
+          ).then(results => {
+            const exitosos = results.filter(r => r.status === 'fulfilled').length
+            setAvisoStatus(exitosos > 0 ? 'ok' : 'error')
+            setTimeout(() => setAvisoStatus(''), 5000)
+          })
+        }
       }
-    } catch (e) { console.error(e) }
+    } catch (e) {
+      console.error('fetchEstudiantes error:', e)
+    }
     setLoading(false)
   }
 
@@ -86,23 +173,28 @@ export default function Asistencia({ curso, user, onVolver }) {
 
         if (idAsistencia) {
           // UPDATE
-          await supabase
+          const { error } = await supabase
             .from('asistencias')
-            .update({ estado, hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null })
+            .update({
+              estado,
+              hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null
+            })
             .eq('id_asistencia', idAsistencia)
+          if (error) console.error('Update error para', id, error)
         } else {
           // INSERT
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('asistencias')
             .insert({
-              id_curso: curso.id_curso,
+              id_curso:     curso.id_curso,
               id_estudiante: id,
-              fecha: hoy,
+              fecha:        hoy,
               estado,
               hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
             })
             .select()
             .single()
+          if (error) console.error('Insert error para', id, error)
           if (data) {
             setAsistencias(prev => ({
               ...prev,
@@ -112,13 +204,13 @@ export default function Asistencia({ curso, user, onVolver }) {
         }
       }
       setSaved(true)
-      // Re-fetch para actualizar IDs
+      // Re-fetch para sincronizar IDs
       await fetchEstudiantes()
     } catch (e) { console.error(e) }
     setSaving(false)
   }
 
-  // Estadísticas rápidas
+  // Estadísticas
   const conteo = estudiantes.reduce((acc, e) => {
     const est = asistencias[e.id_usuario]?.estado || 'PENDIENTE'
     acc[est] = (acc[est] || 0) + 1
@@ -176,6 +268,23 @@ export default function Asistencia({ curso, user, onVolver }) {
         </div>
       </div>
 
+      {/* Banner de aviso de correos */}
+      {avisoStatus === 'enviando' && (
+        <div style={styles.banner('#2563eb')}>
+          ⏳ Enviando aviso de asistencia a los estudiantes del curso…
+        </div>
+      )}
+      {avisoStatus === 'ok' && (
+        <div style={styles.banner('#10b981')}>
+          ✅ Aviso de asistencia enviado correctamente a los estudiantes inscritos.
+        </div>
+      )}
+      {avisoStatus === 'error' && (
+        <div style={styles.banner('#ef4444')}>
+          ⚠️ No se pudieron enviar los correos de aviso. Verifica la Edge Function <code>send-email</code>.
+        </div>
+      )}
+
       {/* Stats bar */}
       <div style={styles.statsBar} className="fade-up fade-up-1">
         {ESTADOS.map(est => (
@@ -219,7 +328,14 @@ export default function Asistencia({ curso, user, onVolver }) {
           </div>
         ) : filtrados.length === 0 ? (
           <div style={styles.empty}>
-            <p>No se encontraron estudiantes</p>
+            {estudiantes.length === 0
+              ? <p>⚠️ No hay estudiantes inscritos en este curso.<br/>
+                  <small style={{color:'#475569'}}>
+                    Verifica que existan inscripciones activas en la tabla <code>inscripciones_curso</code>.
+                  </small>
+                </p>
+              : <p>No se encontraron estudiantes con ese filtro.</p>
+            }
           </div>
         ) : (
           <table style={styles.table}>
@@ -346,6 +462,15 @@ const styles = {
   pctText: { position:'absolute', fontSize:12, fontWeight:700, color:'#10b981', fontFamily:"'JetBrains Mono',monospace" },
   pctLabel: { fontSize:13, fontWeight:600, color:'#f1f5f9' },
   pctSub: { fontSize:12, color:'#64748b', marginTop:2 },
+  banner: (color) => ({
+    background: `${color}18`,
+    border: `1px solid ${color}44`,
+    borderRadius: 10,
+    padding: '10px 16px',
+    fontSize: 13,
+    color: color,
+    fontWeight: 500,
+  }),
   statsBar: {
     display:'flex', gap:8, flexWrap:'wrap', alignItems:'center',
   },
