@@ -70,11 +70,12 @@ export default function DashboardEstudiante({ user, onLogout }) {
       <aside style={L.sidebar}>
         <div style={{display:'flex',flexDirection:'column',gap:20}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
-            <svg width="30" height="30" viewBox="0 0 36 36" fill="none">
-              <rect width="36" height="36" rx="10" fill="#1e3a6e"/>
-              <path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#d4a843" strokeWidth="1.5" fill="none"/>
-              <circle cx="18" cy="18" r="3.5" fill="#2563eb"/>
-            </svg>
+            <img
+              src="/logo_umg.png"
+              alt="UMG"
+              style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(200,168,75,0.4)' }}
+              onError={e => { e.target.style.display='none' }}
+            />
             <div>
               <div style={{fontSize:14,fontWeight:700,color:'var(--text)',fontFamily:'Syne,sans-serif'}}>BiometricUMG</div>
               <div style={{fontSize:10,color:'var(--gold)',fontFamily:"'DM Mono',monospace"}}>Portal Estudiantil v4.0</div>

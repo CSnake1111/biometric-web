@@ -391,11 +391,12 @@ export default function Login({ onLogin, errorInicial = '' }) {
         {/* Header */}
         <div style={S.header}>
           <div style={S.logoBox}>
-            <svg width="28" height="28" viewBox="0 0 36 36" fill="none">
-              <rect width="36" height="36" rx="10" fill="#1e3a6e"/>
-              <path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#d4a843" strokeWidth="1.5" fill="none"/>
-              <circle cx="18" cy="18" r="3.5" fill="#2563eb"/>
-            </svg>
+            <img
+              src="/logo_umg.png"
+              alt="UMG"
+              style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(200,168,75,0.5)' }}
+              onError={e => { e.target.style.display='none' }}
+            />
           </div>
           <div>
             <h1 style={S.title}>BiometricUMG</h1>

@@ -2,21 +2,21 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 
 // ─────────────────────────────────────────────────────────
-//  GestionUsuarios — Registro de foto + enrolamiento facial
-//  Sube imágenes a Supabase Storage bucket "biometric-fotos"
-//  Guarda rutas en usuarios.foto y en muestras_faciales
+//  GestionUsuarios — Solo para Catedráticos
+//  Muestra ÚNICAMENTE los estudiantes inscritos en sus cursos
+//  Permite subir foto y enrolar datos faciales (solo lectura de info)
 // ─────────────────────────────────────────────────────────
 
 const BUCKET_FOTOS    = 'biometric-fotos'
 const BUCKET_MUESTRAS = 'biometric-muestras'
 
-export default function GestionUsuarios({ user }) {
+export default function GestionUsuarios({ user, cursosDelMaestro = [] }) {
   const [usuarios, setUsuarios]     = useState([])
   const [loading, setLoading]       = useState(true)
   const [busqueda, setBusqueda]     = useState('')
-  const [seleccionado, setSeleccionado] = useState(null)   // usuario activo en panel derecho
-  const [tab, setTab]               = useState('info')     // 'info' | 'foto' | 'facial'
-  const [msg, setMsg]               = useState(null)       // {text, ok}
+  const [seleccionado, setSeleccionado] = useState(null)
+  const [tab, setTab]               = useState('info')
+  const [msg, setMsg]               = useState(null)
 
   // Foto
   const [subiendoFoto, setSubiendoFoto] = useState(false)
@@ -33,9 +33,15 @@ export default function GestionUsuarios({ user }) {
   const [muestrasExistentes, setMuestrasExistentes] = useState(0)
   const TOTAL_MUESTRAS = 20
 
-  const esAdmin = ['Administrador','Catedratico'].includes(user?.roles?.nombre_rol || '')
+  const rol = user?.roles?.nombre_rol || ''
+  const esCatedratico = rol === 'Catedratico'
 
-  useEffect(() => { cargarUsuarios() }, [])
+  // Solo catedráticos acceden a esta vista
+  useEffect(() => {
+    if (esCatedratico) cargarAlumnosDeMisCursos()
+    else setLoading(false)
+  }, [cursosDelMaestro])
+
   useEffect(() => {
     if (seleccionado) {
       setFotoPreview(seleccionado.foto || null)
@@ -44,13 +50,40 @@ export default function GestionUsuarios({ user }) {
     return () => detenerCamara()
   }, [seleccionado])
 
-  const cargarUsuarios = async () => {
+  // Carga solo estudiantes inscritos en los cursos del catedrático
+  const cargarAlumnosDeMisCursos = async () => {
     setLoading(true)
+    if (!cursosDelMaestro || cursosDelMaestro.length === 0) {
+      setUsuarios([])
+      setLoading(false)
+      return
+    }
+
+    const idsCursos = cursosDelMaestro.map(c => c.id_curso)
+
+    // Obtener inscripciones de esos cursos
+    const { data: inscripciones } = await supabase
+      .from('inscripciones_curso')
+      .select('id_estudiante')
+      .in('id_curso', idsCursos)
+      .eq('activo', true)
+
+    if (!inscripciones || inscripciones.length === 0) {
+      setUsuarios([])
+      setLoading(false)
+      return
+    }
+
+    const idsEstudiantes = [...new Set(inscripciones.map(i => i.id_estudiante))]
+
+    // Cargar datos de esos estudiantes
     const { data } = await supabase
       .from('usuarios')
-      .select('id_usuario, nombre, apellido, correo, carne, tipo_persona, carrera, foto, activo, id_rol, roles!left(nombre_rol)')
+      .select('id_usuario, nombre, apellido, correo, carne, tipo_persona, carrera, seccion, foto, activo, id_rol, roles!left(nombre_rol)')
+      .in('id_usuario', idsEstudiantes)
       .eq('activo', true)
       .order('nombre')
+
     setUsuarios(data || [])
     setLoading(false)
   }
@@ -68,7 +101,6 @@ export default function GestionUsuarios({ user }) {
     setTimeout(() => setMsg(null), 4000)
   }
 
-  // ─── FILTRO ───
   const usuariosFiltrados = usuarios.filter(u => {
     const q = busqueda.toLowerCase()
     return (
@@ -79,12 +111,11 @@ export default function GestionUsuarios({ user }) {
     )
   })
 
-  // ─── SUBIR FOTO DE PERFIL ───
+  // ─── SUBIR FOTO ───
   const handleFotoChange = (e) => {
     const file = e.target.files[0]
     if (!file) return
-    const url = URL.createObjectURL(file)
-    setFotoPreview(url)
+    setFotoPreview(URL.createObjectURL(file))
   }
 
   const subirFoto = async () => {
@@ -111,7 +142,6 @@ export default function GestionUsuarios({ user }) {
 
       if (dbErr) throw dbErr
 
-      // Actualizar local
       setSeleccionado(prev => ({ ...prev, foto: publicUrl }))
       setUsuarios(prev => prev.map(u =>
         u.id_usuario === seleccionado.id_usuario ? { ...u, foto: publicUrl } : u
@@ -150,8 +180,6 @@ export default function GestionUsuarios({ user }) {
   }
 
   // ─── ENROLAMIENTO FACIAL ───
-  // Captura TOTAL_MUESTRAS frames desde la cámara,
-  // los sube a Supabase Storage y registra en muestras_faciales
   const iniciarEnrolamiento = async () => {
     if (!seleccionado) return
     if (!camActiva) { await iniciarCamara(); return }
@@ -159,16 +187,10 @@ export default function GestionUsuarios({ user }) {
     setCapturando(true)
     setMuestrasCapturadas(0)
 
-    // Borrar muestras anteriores de esta persona
-    await supabase
-      .from('muestras_faciales')
-      .delete()
-      .eq('id_usuario', seleccionado.id_usuario)
-
-    // Borrar archivos anteriores en storage
+    // Borrar muestras anteriores
+    await supabase.from('muestras_faciales').delete().eq('id_usuario', seleccionado.id_usuario)
     const { data: archivosAnt } = await supabase.storage
-      .from(BUCKET_MUESTRAS)
-      .list(`muestras/${seleccionado.id_usuario}`)
+      .from(BUCKET_MUESTRAS).list(`muestras/${seleccionado.id_usuario}`)
     if (archivosAnt?.length) {
       const paths = archivosAnt.map(f => `muestras/${seleccionado.id_usuario}/${f.name}`)
       await supabase.storage.from(BUCKET_MUESTRAS).remove(paths)
@@ -203,8 +225,7 @@ export default function GestionUsuarios({ user }) {
 
           if (!upErr) {
             const { data: urlData } = supabase.storage
-              .from(BUCKET_MUESTRAS)
-              .getPublicUrl(storagePath)
+              .from(BUCKET_MUESTRAS).getPublicUrl(storagePath)
 
             await supabase.from('muestras_faciales').insert({
               id_usuario:     seleccionado.id_usuario,
@@ -219,7 +240,6 @@ export default function GestionUsuarios({ user }) {
           console.error('Error capturando muestra:', e)
         }
 
-        // Pausa entre capturas para variación
         setTimeout(capturarFrame, 400)
       }, 'image/jpeg', 0.85)
     }
@@ -246,9 +266,13 @@ export default function GestionUsuarios({ user }) {
     mostrarMsg('🗑 Muestras eliminadas')
   }
 
-  if (!esAdmin) return (
+  // Acceso denegado si no es catedrático
+  if (!esCatedratico) return (
     <div style={S.center}>
-      <p style={{ color: 'var(--text2)' }}>Solo administradores y catedráticos pueden gestionar usuarios.</p>
+      <div style={{textAlign:'center',color:'var(--text2)'}}>
+        <div style={{fontSize:40,marginBottom:12}}>🔒</div>
+        <p>La gestión de usuarios solo está disponible en la aplicación de escritorio.</p>
+      </div>
     </div>
   )
 
@@ -257,7 +281,10 @@ export default function GestionUsuarios({ user }) {
       {/* ── Panel izquierdo: lista ── */}
       <div style={S.sidebar}>
         <div style={S.sideHeader}>
-          <h2 style={S.sideTitle}>👥 Usuarios</h2>
+          <h2 style={S.sideTitle}>👥 Mis Alumnos</h2>
+          <p style={{fontSize:11,color:'var(--text3)',marginBottom:8,marginTop:-4}}>
+            Solo estudiantes inscritos en tus cursos
+          </p>
           <input
             style={S.search}
             placeholder="Buscar por nombre, carné..."
@@ -270,6 +297,11 @@ export default function GestionUsuarios({ user }) {
           <div style={S.center}><span style={S.spin} /></div>
         ) : (
           <div style={S.lista}>
+            {usuariosFiltrados.length === 0 && !loading && (
+              <p style={{color:'var(--text3)',fontSize:13,textAlign:'center',padding:20}}>
+                {usuarios.length === 0 ? 'No tienes alumnos inscritos aún' : 'Sin resultados'}
+              </p>
+            )}
             {usuariosFiltrados.map(u => (
               <button
                 key={u.id_usuario}
@@ -278,23 +310,20 @@ export default function GestionUsuarios({ user }) {
               >
                 <div style={S.avatar}>
                   {u.foto
-                    ? <img src={u.foto} alt="" style={S.avatarImg} />
-                    : <span style={{ fontSize: 20 }}>👤</span>
+                    ? <img src={u.foto} alt="" style={S.avatarImg}
+                        onError={e => { e.target.style.display='none'; e.target.nextSibling.style.display='flex' }}
+                      />
+                    : null
                   }
+                  <span style={{fontSize:20, display: u.foto ? 'none' : 'flex'}}>👤</span>
                 </div>
                 <div style={{ flex: 1, textAlign: 'left' }}>
                   <div style={S.userName}>{u.nombre} {u.apellido}</div>
-                  <div style={S.userSub}>{u.roles?.nombre_rol || 'Sin rol'} · {u.carne || 'sin carné'}</div>
+                  <div style={S.userSub}>{u.roles?.nombre_rol || 'Estudiante'} · {u.carne || 'sin carné'}</div>
                 </div>
-                {/* Badge biométrico */}
                 <div style={{ fontSize: 11, color: u.foto ? '#10b981' : '#6b7280' }} title="Foto">📷</div>
               </button>
             ))}
-            {usuariosFiltrados.length === 0 && (
-              <p style={{ color: 'var(--text3)', fontSize: 13, textAlign: 'center', padding: 20 }}>
-                Sin resultados
-              </p>
-            )}
           </div>
         )}
       </div>
@@ -305,16 +334,18 @@ export default function GestionUsuarios({ user }) {
           <div style={S.center}>
             <div style={{ textAlign: 'center', color: 'var(--text3)' }}>
               <div style={{ fontSize: 48, marginBottom: 12 }}>👈</div>
-              <p>Selecciona un usuario para gestionar su foto y datos biométricos</p>
+              <p>Selecciona un alumno para ver su foto y gestionar datos biométricos</p>
             </div>
           </div>
         ) : (
           <>
-            {/* Header del usuario */}
+            {/* Header */}
             <div style={S.detailHeader}>
               <div style={S.avatarLg}>
                 {seleccionado.foto
-                  ? <img src={seleccionado.foto} alt="" style={S.avatarImgLg} />
+                  ? <img src={seleccionado.foto} alt="" style={S.avatarImgLg}
+                      onError={e => { e.target.style.display='none' }}
+                    />
                   : <span style={{ fontSize: 36 }}>👤</span>
                 }
               </div>
@@ -332,7 +363,12 @@ export default function GestionUsuarios({ user }) {
               </div>
             </div>
 
-            {/* Tabs */}
+            {/* Aviso: solo foto y facial, NO edición de datos */}
+            <div style={{padding:'8px 14px',borderRadius:10,background:'rgba(217,119,6,0.08)',border:'1px solid rgba(217,119,6,0.2)',fontSize:12,color:'#fcd34d'}}>
+              ℹ️ Solo puedes gestionar la foto y datos biométricos. Para modificar información del alumno usa la aplicación de escritorio.
+            </div>
+
+            {/* Tabs: solo foto y facial, NO info editable */}
             <div style={S.tabs}>
               {[['info','📋 Info'],['foto','📷 Foto'],['facial','👁 Facial']].map(([t, l]) => (
                 <button key={t} style={{ ...S.tab, ...(tab === t ? S.tabActive : {}) }}
@@ -342,14 +378,13 @@ export default function GestionUsuarios({ user }) {
               ))}
             </div>
 
-            {/* Mensaje */}
             {msg && (
               <div style={{ ...S.msgBox, background: msg.ok ? 'rgba(16,185,129,0.1)' : 'rgba(220,38,38,0.1)', borderColor: msg.ok ? 'rgba(16,185,129,0.3)' : 'rgba(220,38,38,0.3)', color: msg.ok ? '#6ee7b7' : '#fca5a5' }}>
                 {msg.text}
               </div>
             )}
 
-            {/* ── Tab Info ── */}
+            {/* ── Tab Info (solo lectura) ── */}
             {tab === 'info' && (
               <div style={S.infoGrid}>
                 {[
@@ -371,24 +406,18 @@ export default function GestionUsuarios({ user }) {
             {/* ── Tab Foto ── */}
             {tab === 'foto' && (
               <div style={S.fotoWrap}>
-                <p style={S.hint}>
-                  Sube una foto de perfil. Se guardará en la nube y se usará en reportes y dashboards.
-                </p>
+                <p style={S.hint}>Sube una foto de perfil para este alumno. Se usará en reportes y en el sistema de reconocimiento.</p>
 
                 <div style={S.fotoBox}>
                   {fotoPreview
-                    ? <img src={fotoPreview} alt="preview" style={S.fotoPreview} />
+                    ? <img src={fotoPreview} alt="preview" style={S.fotoPreview}
+                        onError={e => { e.target.style.display='none' }}
+                      />
                     : <div style={S.fotoPlaceholder}><span style={{ fontSize: 48 }}>📷</span><p style={{ color: 'var(--text3)', fontSize: 13 }}>Sin foto</p></div>
                   }
                 </div>
 
-                <input
-                  ref={fotoInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={handleFotoChange}
-                />
+                <input ref={fotoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFotoChange} />
 
                 <div style={{ display: 'flex', gap: 10 }}>
                   <button style={S.btnSecondary} onClick={() => fotoInputRef.current?.click()}>
@@ -397,15 +426,11 @@ export default function GestionUsuarios({ user }) {
                   <button
                     style={{ ...S.btnPrimary, opacity: subiendoFoto ? .6 : 1 }}
                     onClick={subirFoto}
-                    disabled={subiendoFoto || !fotoPreview}
+                    disabled={subiendoFoto || !fotoInputRef.current?.files?.[0]}
                   >
                     {subiendoFoto ? <><span style={S.spin} /> Subiendo...</> : '☁ Guardar en nube'}
                   </button>
                 </div>
-
-                <p style={{ ...S.hint, marginTop: 8 }}>
-                  💡 También puedes tomar una foto con la cámara usando la pestaña <strong>Facial</strong>.
-                </p>
               </div>
             )}
 
@@ -413,10 +438,9 @@ export default function GestionUsuarios({ user }) {
             {tab === 'facial' && (
               <div style={S.facialWrap}>
                 <p style={S.hint}>
-                  Captura <strong>{TOTAL_MUESTRAS} muestras faciales</strong> para que el sistema pueda identificar al usuario por reconocimiento facial. El proceso toma unos segundos.
+                  Captura <strong>{TOTAL_MUESTRAS} muestras faciales</strong> para el reconocimiento biométrico. Las imágenes se guardan en Supabase Storage.
                 </p>
 
-                {/* Estado actual */}
                 <div style={S.statsRow}>
                   <div style={S.statBox}>
                     <span style={S.statNum}>{muestrasExistentes}</span>
@@ -432,7 +456,6 @@ export default function GestionUsuarios({ user }) {
                   </div>
                 </div>
 
-                {/* Cámara */}
                 <div style={S.camBox}>
                   <video ref={videoRef} style={{ ...S.video, display: camActiva ? 'block' : 'none' }} playsInline muted autoPlay />
                   <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -446,7 +469,6 @@ export default function GestionUsuarios({ user }) {
                     </div>
                   )}
 
-                  {/* Barra de progreso durante captura */}
                   {capturando && (
                     <div style={S.progressOverlay}>
                       <div style={S.progressBar}>
@@ -459,20 +481,15 @@ export default function GestionUsuarios({ user }) {
                   )}
                 </div>
 
-                {/* Botones */}
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {!camActiva ? (
-                    <button style={S.btnPrimary} onClick={iniciarCamara}>
-                      📹 Iniciar cámara
-                    </button>
+                    <button style={S.btnPrimary} onClick={iniciarCamara}>📹 Iniciar cámara</button>
                   ) : !capturando ? (
                     <>
                       <button style={S.btnPrimary} onClick={iniciarEnrolamiento}>
                         ▶ {muestrasExistentes > 0 ? 'Re-enrolar' : 'Enrolar rostro'}
                       </button>
-                      <button style={S.btnSecondary} onClick={detenerCamara}>
-                        ⏹ Detener cámara
-                      </button>
+                      <button style={S.btnSecondary} onClick={detenerCamara}>⏹ Detener cámara</button>
                     </>
                   ) : (
                     <button style={{ ...S.btnSecondary, borderColor: 'rgba(220,38,38,0.4)', color: '#fca5a5' }} onClick={cancelarEnrolamiento}>
@@ -488,7 +505,7 @@ export default function GestionUsuarios({ user }) {
                 </div>
 
                 <p style={S.hint}>
-                  💡 Pide al usuario que mire directo a la cámara con buena iluminación. El sistema capturará imágenes automáticamente cada 0.4 segundos.
+                  💡 Pide al alumno que mire directo a la cámara con buena iluminación. Se capturarán {TOTAL_MUESTRAS} imágenes automáticamente.
                 </p>
               </div>
             )}
@@ -501,9 +518,7 @@ export default function GestionUsuarios({ user }) {
 
 // ─── Estilos ───
 const S = {
-  root: {
-    display: 'flex', height: '100%', gap: 0, overflow: 'hidden',
-  },
+  root: { display: 'flex', height: '100%', gap: 0, overflow: 'hidden' },
   sidebar: {
     width: 280, flexShrink: 0,
     borderRight: '1px solid rgba(255,255,255,0.06)',
@@ -511,7 +526,7 @@ const S = {
     background: 'rgba(255,255,255,0.015)',
   },
   sideHeader: { padding: '20px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' },
-  sideTitle:  { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 10, fontFamily: 'Syne,sans-serif' },
+  sideTitle:  { fontSize: 16, fontWeight: 700, color: 'var(--text)', marginBottom: 4, fontFamily: 'Syne,sans-serif' },
   search: {
     width: '100%', padding: '8px 12px', borderRadius: 8,
     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
@@ -532,8 +547,6 @@ const S = {
   avatarImg: { width: '100%', height: '100%', objectFit: 'cover' },
   userName: { fontSize: 13, fontWeight: 600, color: 'var(--text)', textAlign: 'left' },
   userSub:  { fontSize: 11, color: 'var(--text3)', marginTop: 1 },
-
-  // Detail panel
   detail: {
     flex: 1, padding: '24px 28px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16,
   },
@@ -548,23 +561,17 @@ const S = {
   detailSub:  { fontSize: 12, color: 'var(--text2)', marginTop: 3 },
   badges: { display: 'flex', gap: 8, marginTop: 8 },
   badge: { fontSize: 11, padding: '3px 10px', borderRadius: 20, fontWeight: 600 },
-
   tabs: { display: 'flex', gap: 6, background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 4 },
   tab: {
     flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
     background: 'transparent', color: 'var(--text2)', fontSize: 13, fontWeight: 500, cursor: 'pointer',
   },
   tabActive: { background: 'rgba(255,255,255,0.08)', color: 'var(--text)', fontWeight: 600, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' },
-
   msgBox: { padding: '10px 14px', borderRadius: 10, border: '1px solid', fontSize: 13 },
-
-  // Info tab
   infoGrid: { display: 'flex', flexDirection: 'column', gap: 8 },
   infoRow: { display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8 },
   infoKey: { fontSize: 12, color: 'var(--text3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' },
   infoVal: { fontSize: 13, color: 'var(--text)', fontWeight: 500 },
-
-  // Foto tab
   fotoWrap: { display: 'flex', flexDirection: 'column', gap: 14 },
   fotoBox: {
     width: 200, height: 200, borderRadius: 12, overflow: 'hidden',
@@ -573,8 +580,6 @@ const S = {
   },
   fotoPreview: { width: '100%', height: '100%', objectFit: 'cover' },
   fotoPlaceholder: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 },
-
-  // Facial tab
   facialWrap: { display: 'flex', flexDirection: 'column', gap: 14 },
   statsRow: { display: 'flex', gap: 12 },
   statBox: {
@@ -583,7 +588,6 @@ const S = {
   },
   statNum: { display: 'block', fontSize: 28, fontWeight: 700, color: '#10b981', fontFamily: 'Syne,sans-serif' },
   statLbl: { fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em' },
-
   camBox: {
     width: '100%', maxWidth: 400, aspectRatio: '4/3', borderRadius: 14, overflow: 'hidden',
     background: '#06090f', border: '1px solid rgba(255,255,255,0.08)',
@@ -597,8 +601,6 @@ const S = {
   },
   progressBar: { width: '100%', height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.2)' },
   progressFill: { height: '100%', borderRadius: 3, background: 'linear-gradient(90deg,#2563eb,#10b981)', transition: 'width .3s' },
-
-  // Botones
   btnPrimary: {
     padding: '10px 20px', borderRadius: 10, border: 'none', cursor: 'pointer',
     background: 'linear-gradient(135deg,#1e3a6e,#2563eb)', color: '#fff',

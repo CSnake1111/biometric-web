@@ -17,6 +17,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
   const [loadHist, setLoadHist]   = useState(false)
   const rol = user.roles?.nombre_rol || user.tipo_persona || ''
   const esAdmin = rol === 'Administrador'
+  const esCatedratico = rol === 'Catedratico'
 
   useEffect(() => {
     const t = setInterval(() => setAhora(new Date()), 1000)
@@ -34,7 +35,9 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
         inscripciones_curso(id_inscripcion, activo)
       `).eq('activo', true)
 
-      if (rol === 'Catedratico') q = q.eq('id_catedratico', user.id_usuario)
+      // Admin ve todos los cursos; catedrático solo los suyos
+      if (esCatedratico) q = q.eq('id_catedratico', user.id_usuario)
+
       const { data: cs } = await q
       const lista = cs || []
       setCursos(lista)
@@ -74,20 +77,28 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
     PRESENTE:'#059669', AUSENTE:'#dc2626', TARDANZA:'#7c3aed', JUSTIFICADO:'#d97706', PENDIENTE:'#3d4f6e'
   }
 
+  // Tabs disponibles: admin NO ve "Usuarios" (eso es solo escritorio)
+  // Catedrático SÍ ve "Usuarios" pero solo los de sus cursos (filtrado en GestionUsuarios)
+  const tabsDisponibles = esCatedratico
+    ? [['cursos','📚 Mis Cursos'],['historial','📋 Asistencia Hoy'],['usuarios','👥 Mis Alumnos']]
+    : [['cursos','📚 Cursos'],['historial','📋 Asistencia Hoy']]
+
   return (
     <div style={L.root}>
       {/* Sidebar */}
       <aside style={L.sidebar}>
         <div style={L.sTop}>
+          {/* Logo UMG */}
           <div style={L.brand}>
-            <svg width="30" height="30" viewBox="0 0 36 36" fill="none">
-              <rect width="36" height="36" rx="10" fill="#1e3a6e"/>
-              <path d="M18 8L28 13V23L18 28L8 23V13L18 8Z" stroke="#d4a843" strokeWidth="1.5" fill="none"/>
-              <circle cx="18" cy="18" r="3.5" fill="#2563eb"/>
-            </svg>
+            <img
+              src="/logo_umg.png"
+              alt="UMG"
+              style={{ width:42, height:42, borderRadius:'50%', objectFit:'cover', border:'2px solid rgba(200,168,75,0.4)' }}
+              onError={e => { e.target.style.display='none' }}
+            />
             <div>
-              <div style={{fontSize:14,fontWeight:700,color:'var(--text)',fontFamily:'Syne,sans-serif'}}>BiometricUMG</div>
-              <div style={{fontSize:10,color:'var(--gold)',fontFamily:"'DM Mono',monospace"}}>Portal Docente v4.0</div>
+              <div style={{fontSize:13,fontWeight:700,color:'var(--text)',fontFamily:'Syne,sans-serif',lineHeight:1.2}}>BiometricUMG</div>
+              <div style={{fontSize:9,color:'var(--gold)',fontFamily:"'DM Mono',monospace",marginTop:1}}>Portal Académico · UMG La Florida</div>
             </div>
           </div>
 
@@ -95,7 +106,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
             <div style={{...L.avatar, overflow:'hidden', padding:0}}>
               {user.foto
                 ? <img src={user.foto} alt="" style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:'50%'}} />
-                : <>{user.nombre?.[0]}{user.apellido?.[0]}</>
+                : <span style={{fontSize:13,fontWeight:700,color:'#fff'}}>{user.nombre?.[0]}{user.apellido?.[0]}</span>
               }
             </div>
             <div style={{minWidth:0}}>
@@ -112,7 +123,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
           </div>
 
           <nav style={{display:'flex',flexDirection:'column',gap:4}}>
-            {[['cursos','📚 Mis Cursos'],['historial','📋 Asistencia Hoy'],['usuarios','👥 Usuarios']].map(([t,l]) => (
+            {tabsDisponibles.map(([t,l]) => (
               <button key={t} style={{...L.navBtn,...(tab===t?L.navBtnActive:{})}} onClick={() => setTab(t)}>{l}</button>
             ))}
           </nav>
@@ -153,7 +164,7 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
         {tab === 'cursos' && (
           <>
             <div style={L.sectionHeader} className="fade-up fade-up-1">
-              <h2 style={L.sectionTitle}>Mis Cursos</h2>
+              <h2 style={L.sectionTitle}>{esAdmin ? 'Todos los Cursos' : 'Mis Cursos'}</h2>
               <button style={L.refreshBtn} onClick={fetchData}>↻ Actualizar</button>
             </div>
 
@@ -210,9 +221,10 @@ export default function DashboardMaestro({ user, onLogout, onIrAsistencia }) {
           </>
         )}
 
-        {tab === 'usuarios' && (
+        {/* Solo catedráticos ven sus alumnos aquí */}
+        {tab === 'usuarios' && esCatedratico && (
           <div style={{flex:1,overflow:'hidden',display:'flex',height:'calc(100vh - 180px)'}}>
-            <GestionUsuarios user={user} />
+            <GestionUsuarios user={user} cursosDelMaestro={cursos} />
           </div>
         )}
 
@@ -301,13 +313,13 @@ const L = {
   navBtn: {
     textAlign:'left', padding:'10px 12px', borderRadius:10,
     border:'none', background:'transparent', color:'var(--text2)',
-    fontSize:13, fontWeight:500, transition:'all .2s',
+    fontSize:13, fontWeight:500, transition:'all .2s', cursor:'pointer',
   },
   navBtnActive: { background:'rgba(37,99,235,0.12)', color:'var(--accent3)', fontWeight:600 },
   logoutBtn: {
     background:'rgba(220,38,38,0.08)', border:'1px solid rgba(220,38,38,0.2)',
     borderRadius:10, padding:'10px 14px', color:'#fca5a5',
-    fontSize:13, fontWeight:500, width:'100%',
+    fontSize:13, fontWeight:500, width:'100%', cursor:'pointer',
   },
   main: { flex:1, overflow:'auto', padding:'28px 32px', display:'flex', flexDirection:'column', gap:20 },
   statsRow: { display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 },
@@ -320,7 +332,7 @@ const L = {
   sectionTitle: { fontSize:22,fontWeight:700,color:'var(--text)',letterSpacing:'-0.5px',fontFamily:'Syne,sans-serif' },
   refreshBtn: {
     background:'rgba(37,99,235,0.1)', border:'1px solid rgba(37,99,235,0.25)',
-    borderRadius:10, padding:'9px 16px', color:'var(--accent3)', fontSize:13, fontWeight:500,
+    borderRadius:10, padding:'9px 16px', color:'var(--accent3)', fontSize:13, fontWeight:500, cursor:'pointer',
   },
   grid: { display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:16 },
   courseCard: {
@@ -334,7 +346,7 @@ const L = {
   },
   asistBtn: {
     border:'none', borderRadius:8, padding:'8px 14px',
-    color:'#fff', fontSize:12, fontWeight:600,
+    color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer',
   },
   empty: {
     flex:1, display:'flex', flexDirection:'column', alignItems:'center',
