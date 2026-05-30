@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import Login from './pages/Login'
+import DashboardAdmin from './pages/DashboardAdmin'
 import DashboardMaestro from './pages/DashboardMaestro'
 import DashboardEstudiante from './pages/DashboardEstudiante'
 import Asistencia from './pages/Asistencia'
+
+const ROLES_WEB = ['Administrador', 'Catedratico', 'Estudiante']
 
 export default function App() {
   const [user, setUser]           = useState(null)
@@ -42,21 +45,19 @@ export default function App() {
   }
 
   if (loading) return (
-    <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:16}}>
-      <div style={{width:36,height:36,border:'2px solid rgba(37,99,235,0.3)',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', flexDirection:'column', gap:16 }}>
+      <div style={{ width:36, height:36, border:'2px solid rgba(37,99,235,0.3)', borderTopColor:'#2563eb', borderRadius:'50%', animation:'spin 1s linear infinite' }}/>
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 
   if (!user) return <Login onLogin={handleLogin} />
 
-  // Detectar rol: join con tabla roles tiene prioridad, tipo_persona como fallback
+  // Rol canónico: tabla roles tiene prioridad sobre tipo_persona
   const rol = user.roles?.nombre_rol || user.tipo_persona || ''
 
-  // ⛔ CONTROL DE ACCESO — solo estos roles pueden usar la web
-  const ROLES_WEB = ['Administrador', 'Catedratico', 'Estudiante']
+  // Control de acceso: solo 3 roles pueden usar el portal web
   if (!ROLES_WEB.includes(rol)) {
-    // Rol no autorizado: limpiar sesión y mostrar error en login
     localStorage.removeItem('umg_session')
     return (
       <Login
@@ -66,12 +67,17 @@ export default function App() {
     )
   }
 
-  if (page === 'asistencia' && cursoActivo)
+  // Ruta de asistencia (solo maestros/admin pueden llegar aquí)
+  if (page === 'asistencia' && cursoActivo && rol !== 'Estudiante')
     return <Asistencia curso={cursoActivo} user={user} onVolver={volverDashboard} />
 
-  if (rol === 'Estudiante')
-    return <DashboardEstudiante user={user} onLogout={handleLogout} />
+  // Dashboard por rol
+  if (rol === 'Administrador')
+    return <DashboardAdmin user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
 
-  // Catedratico y Administrador
-  return <DashboardMaestro user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
+  if (rol === 'Catedratico')
+    return <DashboardMaestro user={user} onLogout={handleLogout} onIrAsistencia={irAsistencia} />
+
+  // Estudiante
+  return <DashboardEstudiante user={user} onLogout={handleLogout} />
 }
