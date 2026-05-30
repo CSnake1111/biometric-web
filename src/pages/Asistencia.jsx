@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 
 const ESTADOS = ['PRESENTE', 'AUSENTE', 'JUSTIFICADO', 'TARDANZA']
@@ -67,12 +67,55 @@ export default function Asistencia({ curso, user, onVolver }) {
   const [filter, setFilter]           = useState('TODOS')
   const [search, setSearch]           = useState('')
   const [avisoStatus, setAvisoStatus]   = useState('') // '', 'enviando', 'ok', 'error'
-  const avisoEnviado = useRef(false)  // useRef: no re-renderiza y no se resetea en fetchEstudiantes
+  const [syncMsg, setSyncMsg]         = useState('') // mensaje de sync en tiempo real
+  const avisoEnviado = useRef(false)
+  const savingRef    = useRef(false)  // evitar que realtime pise un guardado en curso
 
-const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemala' })
+  const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemala' })
   const hoyDisplay = new Date().toLocaleDateString('es-GT', { weekday:'long', day:'numeric', month:'long' })
 
+  // ── Carga inicial ────────────────────────────────────────────────
   useEffect(() => { fetchEstudiantes() }, [curso])
+
+  // ── Realtime: escuchar cambios en asistencias desde el desktop ──
+  useEffect(() => {
+    if (!curso?.id_curso) return
+
+    const channel = supabase
+      .channel(`asistencias-curso-${curso.id_curso}`)
+      .on(
+        'postgres_changes',
+        {
+          event:  '*',           // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table:  'asistencias',
+          filter: `id_curso=eq.${curso.id_curso}`,
+        },
+        (payload) => {
+          // Si estamos en medio de un guardado nuestro, ignorar para no pisarnos
+          if (savingRef.current) return
+
+          const row = payload.new || payload.old
+          if (!row || row.fecha !== hoy) return
+
+          // Actualizar solo ese estudiante en el estado local
+          setAsistencias(prev => ({
+            ...prev,
+            [row.id_estudiante]: {
+              estado:       row.estado,
+              idAsistencia: row.id_asistencia,
+            }
+          }))
+
+          // Mostrar aviso de sync
+          setSyncMsg('🔄 Sincronizado con el programa de escritorio')
+          setTimeout(() => setSyncMsg(''), 3000)
+        }
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [curso, hoy])
 
   const fetchEstudiantes = async () => {
     setLoading(true)
@@ -163,20 +206,21 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
 
   const guardar = async () => {
     setSaving(true)
+    savingRef.current = true
     try {
       const hora = new Date().toLocaleTimeString('es-GT', { hour:'2-digit', minute:'2-digit' })
       const nuevasAsistencias = { ...asistencias }
       let hayError = false
 
       for (const est of estudiantes) {
-        const id = est.id_usuario
+        const id    = est.id_usuario
         const estado = asistencias[id]?.estado || 'PENDIENTE'
         const idAsistenciaExistente = asistencias[id]?.idAsistencia
 
         let data, error
 
         if (idAsistenciaExistente) {
-          // Ya existe el registro → UPDATE directo por id_asistencia (100% confiable)
+          // Registro ya existe → UPDATE directo por PK (100% confiable)
           ;({ data, error } = await supabase
             .from('asistencias')
             .update({
@@ -187,7 +231,7 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
             .select()
             .single())
         } else {
-          // No existe → INSERT; si hay conflicto lo resolvemos con UPDATE manual
+          // No existe → INSERT; si hay conflicto por constraint único, hacer UPDATE
           ;({ data, error } = await supabase
             .from('asistencias')
             .insert({
@@ -200,7 +244,6 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
             .select()
             .single())
 
-          // Si el INSERT falla por constraint duplicado, hacer UPDATE por columnas clave
           if (error && (error.code === '23505' || error.message?.includes('duplicate'))) {
             ;({ data, error } = await supabase
               .from('asistencias')
@@ -217,20 +260,18 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
         }
 
         if (error) {
-          console.error('Error guardando asistencia para estudiante', id, '| estado:', estado, '|', error)
+          console.error('Error guardando estudiante', id, '| estado:', estado, '|', error)
           hayError = true
         } else if (data) {
           nuevasAsistencias[id] = { estado, idAsistencia: data.id_asistencia }
         }
       }
 
-      // Actualizar el estado local con los datos confirmados por Supabase
-      // SIN hacer re-fetch (el re-fetch sobreescribía los cambios en vuelo)
       setAsistencias(nuevasAsistencias)
       setSaved(!hayError)
-      if (hayError) console.warn('Algunos registros no se guardaron correctamente. Revisa la consola.')
-    } catch (e) { console.error('guardar() excepción:', e) }
+    } catch (e) { console.error('guardar() error:', e) }
     setSaving(false)
+    savingRef.current = false
   }
 
   // Estadísticas
@@ -432,6 +473,7 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
       {/* Footer save */}
       <div style={styles.footer} className="fade-up fade-up-4">
         <div style={styles.footerInfo}>
+          {syncMsg && <span style={{color:'#60a5fa',fontSize:12}}>{syncMsg}</span>}
           {saved
             ? <span style={{color:'#10b981'}}>✓ Guardado correctamente en Supabase</span>
             : <span style={{color:'#64748b'}}>Cambios sin guardar</span>
