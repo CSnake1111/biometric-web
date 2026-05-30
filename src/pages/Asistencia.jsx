@@ -165,43 +165,71 @@ const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemal
     setSaving(true)
     try {
       const hora = new Date().toLocaleTimeString('es-GT', { hour:'2-digit', minute:'2-digit' })
+      const nuevasAsistencias = { ...asistencias }
+      let hayError = false
 
       for (const est of estudiantes) {
         const id = est.id_usuario
         const estado = asistencias[id]?.estado || 'PENDIENTE'
+        const idAsistenciaExistente = asistencias[id]?.idAsistencia
 
-        // FIX Bug#4: usar upsert en lugar de INSERT/UPDATE separados.
-        // Si la app desktop ya insertó el registro, el INSERT fallaba en silencio
-        // por el constraint único (id_curso, id_estudiante, fecha).
-        // upsert con onConflict garantiza que siempre se actualice.
-        const { data, error } = await supabase
-          .from('asistencias')
-          .upsert(
-            {
+        let data, error
+
+        if (idAsistenciaExistente) {
+          // Ya existe el registro → UPDATE directo por id_asistencia (100% confiable)
+          ;({ data, error } = await supabase
+            .from('asistencias')
+            .update({
+              estado,
+              hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
+            })
+            .eq('id_asistencia', idAsistenciaExistente)
+            .select()
+            .single())
+        } else {
+          // No existe → INSERT; si hay conflicto lo resolvemos con UPDATE manual
+          ;({ data, error } = await supabase
+            .from('asistencias')
+            .insert({
               id_curso:      curso.id_curso,
               id_estudiante: id,
               fecha:         hoy,
               estado,
               hora_ingreso:  estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
-            },
-            { onConflict: 'id_curso,id_estudiante,fecha' }
-          )
-          .select()
-          .single()
+            })
+            .select()
+            .single())
+
+          // Si el INSERT falla por constraint duplicado, hacer UPDATE por columnas clave
+          if (error && (error.code === '23505' || error.message?.includes('duplicate'))) {
+            ;({ data, error } = await supabase
+              .from('asistencias')
+              .update({
+                estado,
+                hora_ingreso: estado === 'PRESENTE' || estado === 'TARDANZA' ? hora : null,
+              })
+              .eq('id_curso',      curso.id_curso)
+              .eq('id_estudiante', id)
+              .eq('fecha',         hoy)
+              .select()
+              .single())
+          }
+        }
 
         if (error) {
-          console.error('Upsert error para estudiante', id, error)
+          console.error('Error guardando asistencia para estudiante', id, '| estado:', estado, '|', error)
+          hayError = true
         } else if (data) {
-          setAsistencias(prev => ({
-            ...prev,
-            [id]: { estado, idAsistencia: data.id_asistencia }
-          }))
+          nuevasAsistencias[id] = { estado, idAsistencia: data.id_asistencia }
         }
       }
-      setSaved(true)
-      // Re-fetch para sincronizar IDs actualizados desde Supabase
-      await fetchEstudiantes()
-    } catch (e) { console.error(e) }
+
+      // Actualizar el estado local con los datos confirmados por Supabase
+      // SIN hacer re-fetch (el re-fetch sobreescribía los cambios en vuelo)
+      setAsistencias(nuevasAsistencias)
+      setSaved(!hayError)
+      if (hayError) console.warn('Algunos registros no se guardaron correctamente. Revisa la consola.')
+    } catch (e) { console.error('guardar() excepción:', e) }
     setSaving(false)
   }
 
