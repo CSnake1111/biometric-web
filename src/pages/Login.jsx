@@ -285,6 +285,8 @@ export default function Login({ onLogin, errorInicial = '' }) {
     if (!window.faceapi) return
     let attempts = 0
     const MAX_ATTEMPTS = 80 // ~40 segundos a 500ms
+    // Acumulamos hasta 3 descriptores válidos y promediamos para mayor precisión
+    const descriptoresAcumulados = []
 
     scannerRef.current = setInterval(async () => {
       if (!videoRef.current || !modoFacialActivoRef.current) return
@@ -301,7 +303,7 @@ export default function Login({ onLogin, errorInicial = '' }) {
         const detection = await window.faceapi
           .detectSingleFace(
             videoRef.current,
-            new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.45, inputSize: 320 })
+            new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.4, inputSize: 416 })
           )
           .withFaceLandmarks(true)
           .withFaceDescriptor()
@@ -309,18 +311,29 @@ export default function Login({ onLogin, errorInicial = '' }) {
         if (!detection) {
           if (attempts % 4 === 0)
             setScanMsg(`Buscando rostro... (${Math.round(attempts * 0.5)}s)`)
+          descriptoresAcumulados.length = 0 // resetear si se pierde el rostro
           return
         }
 
-        // ── Rostro detectado — hacer matching ──
+        descriptoresAcumulados.push(detection.descriptor)
+        setScanMsg(`Escaneando... (${descriptoresAcumulados.length}/3)`)
+
+        // Esperar 3 detecciones buenas antes de decidir
+        if (descriptoresAcumulados.length < 3) return
+
+        // Promediar los 3 descriptores → más robusto que uno solo
+        const promedio = new Float32Array(128)
+        for (const desc of descriptoresAcumulados)
+          for (let i = 0; i < 128; i++) promedio[i] += desc[i] / 3
+
         clearInterval(scannerRef.current)
         setScanMsg('Rostro detectado — verificando identidad...')
-        await matchFace(detection.descriptor)
+        await matchFace(promedio)
 
       } catch(e) {
         console.error('scan error', e)
       }
-    }, 500)
+    }, 600)
   }
 
   // Ref para saber si el modo facial sigue activo (evita setState en componente desmontado)
@@ -339,7 +352,7 @@ export default function Login({ onLogin, errorInicial = '' }) {
 
     // ── Distancia euclidiana estándar de face-api.js ──
     // Umbral recomendado: < 0.6 = misma persona
-    const UMBRAL = 0.55
+    const UMBRAL = 0.72
 
     let mejorDist  = Infinity
     let mejorUser  = null
