@@ -119,12 +119,13 @@ export default function Login({ onLogin, errorInicial = '' }) {
 
   const startFacial = async () => {
     setCamStatus('loading')
-    setScanMsg('Cargando descriptores faciales...')
+    setScanMsg('Cargando modelos de reconocimiento...')
     setError('')
+    descriptorsRef.current = []
 
-    // Load all face descriptors from Supabase
-    // We store descriptors as base64 JSON in muestras_faciales
+    // ── 1. Obtener fotos de perfil de Supabase Storage para calcular descriptores ──
     try {
+      // Traer usuarios que tienen muestras faciales
       const { data: muestras } = await supabase
         .from('muestras_faciales')
         .select('id_usuario, nombre_archivo')
@@ -135,21 +136,124 @@ export default function Login({ onLogin, errorInicial = '' }) {
         return
       }
 
-      // Group by user
+      // Agrupar por usuario y tomar máximo 5 muestras cada uno
       const byUser = {}
       muestras.forEach(m => {
         if (!byUser[m.id_usuario]) byUser[m.id_usuario] = []
-        byUser[m.id_usuario].push(m)
+        if (byUser[m.id_usuario].length < 5) byUser[m.id_usuario].push(m.nombre_archivo)
       })
 
-      setScanMsg(`${muestras.length} muestras cargadas. Iniciando cámara...`)
+      const uniqueIds = Object.keys(byUser).map(Number)
+
+      // Traer datos del usuario
+      const { data: usuarios } = await supabase
+        .from('usuarios')
+        .select('id_usuario, nombre, apellido, usuario, correo, foto, id_rol, roles(nombre_rol)')
+        .in('id_usuario', uniqueIds)
+        .eq('activo', true)
+
+      if (!usuarios || usuarios.length === 0) {
+        setScanMsg('No se encontraron usuarios activos con biometría')
+        setCamStatus('error')
+        return
+      }
+
+      setScanMsg(`Procesando ${usuarios.length} perfiles biométricos...`)
+
+      // ── 2. Calcular descriptores desde las fotos de perfil en Storage ──
+      // Usamos foto de perfil (bucket "fotos") que ya está en la nube.
+      // face-api.js calcula el descriptor de 128 dimensiones directamente desde la imagen.
+      const descriptoresCargados = []
+
+      for (const usr of usuarios) {
+        if (!usr.foto) continue
+        try {
+          // La foto puede ser una URL de Supabase Storage o URL externa
+          const img = await cargarImagenCORS(usr.foto)
+          if (!img) continue
+
+          const det = await window.faceapi
+            .detectSingleFace(img, new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.4 }))
+            .withFaceLandmarks(true)
+            .withFaceDescriptor()
+
+          if (det) {
+            descriptoresCargados.push({
+              id_usuario:  usr.id_usuario,
+              nombre:      usr.nombre,
+              apellido:    usr.apellido,
+              usuario:     usr.usuario,
+              correo:      usr.correo,
+              id_rol:      usr.id_rol,
+              nombre_rol:  usr.roles?.nombre_rol || '',
+              descriptor:  det.descriptor,
+            })
+          }
+        } catch(e) {
+          console.warn('No se pudo procesar foto de', usr.nombre, e.message)
+        }
+      }
+
+      // Si con foto de perfil no alcanza, intentar con muestras del bucket "rostros"
+      for (const usr of usuarios) {
+        const yaRegistrado = descriptoresCargados.find(d => d.id_usuario === usr.id_usuario)
+        if (yaRegistrado) continue
+
+        const archivos = byUser[usr.id_usuario] || []
+        for (const archivo of archivos) {
+          try {
+            const { data: urlData } = supabase.storage
+              .from('rostros')
+              .getPublicUrl(`${usr.id_usuario}/${archivo}`)
+            const img = await cargarImagenCORS(urlData?.publicUrl)
+            if (!img) continue
+
+            const det = await window.faceapi
+              .detectSingleFace(img, new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.4 }))
+              .withFaceLandmarks(true)
+              .withFaceDescriptor()
+
+            if (det) {
+              descriptoresCargados.push({
+                id_usuario: usr.id_usuario,
+                nombre:     usr.nombre,
+                apellido:   usr.apellido,
+                usuario:    usr.usuario,
+                correo:     usr.correo,
+                id_rol:     usr.id_rol,
+                nombre_rol: usr.roles?.nombre_rol || '',
+                descriptor: det.descriptor,
+              })
+              break // con una muestra válida alcanza para este usuario
+            }
+          } catch(e) {
+            console.warn('Muestra rostros fallo:', archivo, e.message)
+          }
+        }
+      }
+
+      descriptorsRef.current = descriptoresCargados
+      console.log(`✅ Descriptores cargados: ${descriptoresCargados.length}/${usuarios.length} usuarios`)
+
+      if (descriptoresCargados.length === 0) {
+        setScanMsg('No se pudieron procesar los datos biométricos. Verifica las fotos de perfil.')
+        setCamStatus('error')
+        return
+      }
+
+      setScanMsg(`${descriptoresCargados.length} perfiles listos. Iniciando cámara...`)
     } catch(e) {
-      console.error(e)
+      console.error('Error cargando descriptores:', e)
+      setScanMsg('Error al cargar datos biométricos')
+      setCamStatus('error')
+      return
     }
 
-    // Start camera
+    // ── 3. Iniciar cámara ──
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+      })
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -165,167 +269,134 @@ export default function Login({ onLogin, errorInicial = '' }) {
     }
   }
 
+  // Carga una imagen desde URL respetando CORS (usa crossOrigin anonymous)
+  const cargarImagenCORS = (url) => new Promise((resolve) => {
+    if (!url) return resolve(null)
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload  = () => resolve(img)
+    img.onerror = () => resolve(null)
+    // Agregar cache-buster para evitar problemas CORS con caché
+    img.src = url.includes('?') ? url : url + '?t=' + Date.now()
+    setTimeout(() => resolve(null), 8000) // timeout 8s
+  })
+
   const startScanning = () => {
     if (!window.faceapi) return
     let attempts = 0
+    const MAX_ATTEMPTS = 80 // ~40 segundos a 500ms
+
     scannerRef.current = setInterval(async () => {
-      if (!videoRef.current || camStatus === 'found') return
+      if (!videoRef.current || !modoFacialActivoRef.current) return
+
       attempts++
-      if (attempts > 60) {
+      if (attempts > MAX_ATTEMPTS) {
         clearInterval(scannerRef.current)
         setScanMsg('No se detectó ningún rostro. Intenta de nuevo.')
         setCamStatus('error')
         return
       }
+
       try {
         const detection = await window.faceapi
-          .detectSingleFace(videoRef.current, new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 }))
+          .detectSingleFace(
+            videoRef.current,
+            new window.faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.45, inputSize: 320 })
+          )
           .withFaceLandmarks(true)
           .withFaceDescriptor()
 
         if (!detection) {
-          setScanMsg(`Buscando rostro... (${attempts}/60)`)
+          if (attempts % 4 === 0)
+            setScanMsg(`Buscando rostro... (${Math.round(attempts * 0.5)}s)`)
           return
         }
 
-        setScanMsg('Rostro detectado — verificando identidad...')
-        setCamStatus('found')
+        // ── Rostro detectado — hacer matching ──
         clearInterval(scannerRef.current)
+        setScanMsg('Rostro detectado — verificando identidad...')
+        await matchFace(detection.descriptor)
 
-        // Get the descriptor from the video
-        const descriptor = detection.descriptor
-
-        // Compare against registered users in Supabase
-        // We'll use a server-side approach: capture image and let Claude API compare
-        // For now: match against known IDs by fetching user data
-        await matchFace(descriptor)
       } catch(e) {
         console.error('scan error', e)
       }
     }, 500)
   }
 
+  // Ref para saber si el modo facial sigue activo (evita setState en componente desmontado)
+  const modoFacialActivoRef = useRef(false)
+  useEffect(() => {
+    modoFacialActivoRef.current = (camStatus === 'scanning')
+  }, [camStatus])
+
   const matchFace = async (queryDescriptor) => {
-    // Since we can't easily store Float32Array in Supabase,
-    // we use a simpler approach: capture the frame, send to our Claude-powered backend
-    // For demo: we'll do a lightweight matching using stored descriptor data
-    
-    // Fallback: just detect a face was found and ask user to confirm identity
-    setScanMsg('Rostro verificado. Buscando en el sistema...')
-    
-    // Draw detection on canvas
-    if (canvasRef.current && videoRef.current) {
-      const ctx = canvasRef.current.getContext('2d')
-      canvasRef.current.width  = videoRef.current.videoWidth
-      canvasRef.current.height = videoRef.current.videoHeight
-      ctx.drawImage(videoRef.current, 0, 0)
-    }
-
-    // Get current frame as base64
-    const imageBase64 = canvasRef.current?.toDataURL('image/jpeg', 0.8)
-
-    // Query Claude API to identify the person
-    if (imageBase64) {
-      await identifyWithClaude(imageBase64, queryDescriptor)
-    } else {
-      setError('No se pudo capturar imagen. Intenta de nuevo.')
-      setCamStatus('scanning')
-      startScanning()
-    }
-  }
-
-  const identifyWithClaude = async (imageBase64, descriptor) => {
-    try {
-      setScanMsg('Identificando con IA...')
-      
-      // Get users that have facial data
-      const { data: usersWithFace } = await supabase
-        .from('muestras_faciales')
-        .select('id_usuario')
-
-      if (!usersWithFace || usersWithFace.length === 0) {
-        setError('No hay datos biométricos. El estudiante debe registrarse primero en la app.')
-        setCamStatus('error')
-        return
-      }
-
-      const uniqueIds = [...new Set(usersWithFace.map(u => u.id_usuario))]
-
-      // Get user details
-      const { data: usuarios } = await supabase
-        .from('usuarios')
-        .select('*, roles(nombre_rol)')
-        .in('id_usuario', uniqueIds)
-        .eq('activo', true)
-
-      if (!usuarios || usuarios.length === 0) {
-        setError('No se encontraron usuarios con datos biométricos activos.')
-        setCamStatus('error')
-        return
-      }
-
-      // Use Claude API to identify the face
-      const userList = usuarios.map(u => `ID:${u.id_usuario} Nombre:${u.nombre} ${u.apellido}`).join(', ')
-      
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 100,
-          messages: [{
-            role: 'user',
-            content: [
-              {
-                type: 'image',
-                source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64.split(',')[1] }
-              },
-              {
-                type: 'text',
-                text: `Esta imagen proviene de un sistema de control de acceso universitario. Los usuarios registrados son: ${userList}. Responde SOLO con el ID numérico del usuario que reconoces en la imagen, o "0" si no puedes identificar a nadie con certeza. Solo el número, nada más.`
-              }
-            ]
-          }]
-        })
-      })
-
-      const data = await response.json()
-      const idStr = data.content?.[0]?.text?.trim()
-      const idFound = parseInt(idStr)
-
-      if (!idFound || idFound === 0) {
-        setError('Rostro no reconocido. Verifica que estés registrado en el sistema.')
-        setCamStatus('error')
-        setTimeout(() => { setCamStatus('scanning'); startScanning() }, 3000)
-        return
-      }
-
-      const userFound = usuarios.find(u => u.id_usuario === idFound)
-      if (!userFound) {
-        setError('Identificación fallida. Intenta de nuevo.')
-        setCamStatus('error')
-        setTimeout(() => { setCamStatus('scanning'); startScanning() }, 3000)
-        return
-      }
-
-      // El rol se detecta automáticamente — sin restricción manual
-      setScanMsg(`✓ Bienvenido, ${userFound.nombre}!`)
-      stopCamera()
-
-      // Log the biometric access
-      await supabase.from('intentos_login').insert({
-        usuario: userFound.usuario || userFound.correo,
-        exitoso: true,
-        metodo: 'FACIAL_WEB'
-      })
-
-      setTimeout(() => onLogin(userFound), 800)
-
-    } catch(e) {
-      console.error(e)
-      setError('Error al identificar. Verifica tu conexión.')
+    const db = descriptorsRef.current
+    if (!db || db.length === 0) {
+      setError('No hay datos biométricos cargados. Recarga e intenta de nuevo.')
       setCamStatus('error')
+      return
     }
+
+    // ── Distancia euclidiana estándar de face-api.js ──
+    // Umbral recomendado: < 0.6 = misma persona
+    const UMBRAL = 0.55
+
+    let mejorDist  = Infinity
+    let mejorUser  = null
+    let segundaDist = Infinity
+
+    for (const entry of db) {
+      // face-api.js euclideana manual
+      let suma = 0
+      for (let i = 0; i < queryDescriptor.length; i++) {
+        const d = queryDescriptor[i] - entry.descriptor[i]
+        suma += d * d
+      }
+      const dist = Math.sqrt(suma)
+
+      if (dist < mejorDist) {
+        segundaDist = mejorDist
+        mejorDist   = dist
+        mejorUser   = entry
+      } else if (dist < segundaDist) {
+        segundaDist = dist
+      }
+    }
+
+    console.log(`🔍 Mejor dist: ${mejorDist.toFixed(3)} | Segundo: ${segundaDist.toFixed(3)} | Umbral: ${UMBRAL}`)
+
+    if (!mejorUser || mejorDist > UMBRAL) {
+      setError(`Rostro no reconocido (dist=${mejorDist.toFixed(2)}). Verifica la iluminación o regístrate en la app.`)
+      setCamStatus('error')
+      setTimeout(() => {
+        if (descriptorsRef.current.length > 0) {
+          setCamStatus('scanning')
+          setScanMsg('Mira a la cámara...')
+          startScanning()
+        }
+      }, 3500)
+      return
+    }
+
+    // ── Match encontrado ──
+    setCamStatus('found')
+    setScanMsg(`✓ Bienvenido, ${mejorUser.nombre}!`)
+    stopCamera()
+
+    // Traer datos completos del usuario desde Supabase
+    const { data: userFull } = await supabase
+      .from('usuarios')
+      .select('*, roles(nombre_rol)')
+      .eq('id_usuario', mejorUser.id_usuario)
+      .single()
+
+    await supabase.from('intentos_login').insert({
+      usuario: mejorUser.usuario || mejorUser.correo,
+      exitoso: true,
+      metodo:  'FACIAL_WEB'
+    })
+
+    setTimeout(() => onLogin(userFull || mejorUser), 800)
   }
 
   // ─── Password login ───
