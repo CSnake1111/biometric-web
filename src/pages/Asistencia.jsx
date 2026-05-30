@@ -69,7 +69,7 @@ export default function Asistencia({ curso, user, onVolver }) {
   const [avisoStatus, setAvisoStatus]   = useState('') // '', 'enviando', 'ok', 'error'
   const avisoEnviado = useRef(false)  // useRef: no re-renderiza y no se resetea en fetchEstudiantes
 
-  const hoy = new Date().toISOString().split('T')[0]
+const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Guatemala' })
   const hoyDisplay = new Date().toLocaleDateString('es-GT', { weekday:'long', day:'numeric', month:'long' })
 
   useEffect(() => { fetchEstudiantes() }, [curso])
